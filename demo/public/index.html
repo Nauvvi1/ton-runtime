@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ton-runtime demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #111827; color: #f9fafb; }
+    button { margin-right: 8px; margin-bottom: 12px; padding: 10px 14px; border-radius: 8px; border: 0; cursor: pointer; }
+    pre { white-space: pre-wrap; background: #1f2937; padding: 14px; border-radius: 12px; overflow-x: auto; }
+    .row { margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>ton-runtime demo</h1>
+  <div class="row">
+    <button onclick="run('/api/run/success')">Run success flow</button>
+    <button onclick="run('/api/run/fault')">Run fault flow</button>
+    <button onclick="run('/api/run/idempotent')">Run idempotent flow</button>
+    <button onclick="run('/api/resume')">Resume pending</button>
+    <button onclick="refreshData()">Refresh state</button>
+  </div>
+
+  <h2>Last response</h2>
+  <pre id="response">No action yet</pre>
+
+  <h2>Current state</h2>
+  <pre id="state">Loading...</pre>
+
+  <script>
+    async function run(path) {
+      const response = await fetch(path, { method: "POST" });
+      const data = await response.json();
+      document.getElementById("response").textContent = JSON.stringify(data, null, 2);
+      await refreshData();
+    }
+
+    async function refreshData() {
+      const response = await fetch("/api/actions");
+      const data = await response.json();
+      document.getElementById("state").textContent = JSON.stringify(data, null, 2);
+    }
+
+    refreshData();
+    setInterval(refreshData, 2000);
+  </script>
+</body>
+</html>
