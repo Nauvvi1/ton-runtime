@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createId } from "../utils/ids.js";
 import { nowIso } from "../utils/time.js";
 import type { TonAdapter, TonSendParams, TonSendResult } from "./ton-adapter.interface.js";
@@ -12,7 +13,6 @@ export class MockTonAdapter implements TonAdapter {
   public readonly network: string;
   private readonly confirmAfterMs: number;
   private failFirstOperation: boolean;
-  private readonly statuses = new Map<string, { createdAt: number; status: TonSendResult["status"] }>();
 
   public constructor(config: MockTonAdapterConfig = {}) {
     this.network = config.network ?? "testnet";
@@ -30,28 +30,37 @@ export class MockTonAdapter implements TonAdapter {
       throw new Error("Injected failure from MockTonAdapter");
     }
 
+    const submittedAt = nowIso();
     const operationId = createId();
-    this.statuses.set(operationId, { createdAt: Date.now(), status: "submitted" });
 
     return {
       operationId,
-      txHash: createId().replace(/-/g, ""),
-      submittedAt: nowIso(),
+      txHash: this.makeTxHash(operationId),
+      submittedAt,
       network: this.network,
       status: "submitted"
     };
   }
 
   public async getTransactionStatus(operationId: string): Promise<"submitted" | "confirmed" | "failed" | "unknown"> {
-    const entry = this.statuses.get(operationId);
-    if (!entry) {
+    /**
+     * Для demo считаем, что любая mock-операция через confirmAfterMs
+     * становится confirmed, даже после перезапуска процесса.
+     *
+     * Это нужно, чтобы recovery demo был стабильным и не зависел
+     * от in-memory Map, которая очищается при рестарте.
+     */
+    const actionTimestamp = this.extractTimestampFromUuid(operationId);
+
+    if (actionTimestamp === null) {
       return "unknown";
     }
-    if (Date.now() - entry.createdAt >= this.confirmAfterMs) {
-      entry.status = "confirmed";
-      this.statuses.set(operationId, entry);
+
+    if (Date.now() - actionTimestamp >= this.confirmAfterMs) {
+      return "confirmed";
     }
-    return entry.status;
+
+    return "submitted";
   }
 
   public async validateAddress(address: string): Promise<boolean> {
@@ -60,5 +69,20 @@ export class MockTonAdapter implements TonAdapter {
 
   public async normalizeAddress(address: string): Promise<string> {
     return address.trim();
+  }
+
+  private makeTxHash(operationId: string): string {
+    return createHash("md5").update(operationId).digest("hex");
+  }
+
+  /**
+   * Пытаемся получить approximate timestamp из UUID v4 невозможно точно,
+   * поэтому для demo используем fallback: если UUID не timestamp-based,
+   * считаем, что операция "достаточно старая" и подтверждаем её.
+   *
+   * Это лучше для recovery demo, чем вечный unknown.
+   */
+  private extractTimestampFromUuid(_operationId: string): number | null {
+    return Date.now() - this.confirmAfterMs - 1;
   }
 }

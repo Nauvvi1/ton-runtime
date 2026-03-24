@@ -1,11 +1,8 @@
 import express from "express";
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  FileStorage,
-  MockTonAdapter,
-  TonRuntime
-} from "../../src/index.js";
+import { FileStorage, MockTonAdapter, TonRuntime } from "../../src/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,7 +11,9 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.resolve(__dirname, "../public")));
 
-const storage = new FileStorage(path.resolve(__dirname, "../../.runtime-data/demo-runtime.json"));
+const demoStatePath = path.resolve(__dirname, "../../.runtime-data/demo-runtime.json");
+
+const storage = new FileStorage(demoStatePath);
 const runtime = new TonRuntime({
   storage,
   tonAdapter: new MockTonAdapter({ confirmAfterMs: 3000 }),
@@ -36,13 +35,7 @@ const runtime = new TonRuntime({
   }
 });
 
-let failNextAttempt = false;
-
 runtime.registerAction("demo.send_ton", async (ctx) => {
-  if (failNextAttempt && ctx.attempt.number === 1) {
-    throw new Error("Injected demo fault");
-  }
-
   return await ctx.ton.sendTon({
     to: "EQDdemoAddress",
     amount: "1.00",
@@ -54,7 +47,7 @@ runtime.on("timeline", (event) => {
   console.log("timeline:", event);
 });
 
-app.get("/api/actions", async (_req, res) => {
+async function getState() {
   const actions = await runtime.listActions();
   const withTimeline = await Promise.all(
     actions.map(async (action) => ({
@@ -62,14 +55,23 @@ app.get("/api/actions", async (_req, res) => {
       timeline: await runtime.listTimeline(action.id)
     }))
   );
-  res.json({
+
+  return {
+    loadedAt: new Date().toISOString(),
     actions: withTimeline,
     metrics: runtime.getMetrics()
-  });
+  };
+}
+
+app.get("/api/state", async (_req, res) => {
+  res.json(await getState());
+});
+
+app.get("/api/actions", async (_req, res) => {
+  res.json(await getState());
 });
 
 app.post("/api/run/success", async (_req, res) => {
-  failNextAttempt = false;
   const result = await runtime.execute(
     "demo.send_ton",
     async (ctx) =>
@@ -82,17 +84,18 @@ app.post("/api/run/success", async (_req, res) => {
       confirmStrategy: "confirmed"
     }
   );
+
   res.json(result);
 });
 
 app.post("/api/run/fault", async (_req, res) => {
-  failNextAttempt = true;
   const result = await runtime.execute(
     "demo.send_ton",
     async (ctx) => {
       if (ctx.attempt.number === 1) {
         throw new Error("Injected demo fault");
       }
+
       return ctx.ton.sendTon({
         to: "EQDdemoAddress",
         amount: "1.0"
@@ -103,12 +106,15 @@ app.post("/api/run/fault", async (_req, res) => {
       confirmStrategy: "confirmed"
     }
   );
-  failNextAttempt = false;
+
   res.json(result);
 });
 
 app.post("/api/run/idempotent", async (_req, res) => {
-  const key = `same-key-demo`;
+  // Новый ключ на каждый запуск demo-кнопки,
+  // но одинаковый для first и second внутри одного сценария.
+  const key = `same-key-demo-${Date.now()}`;
+
   const first = await runtime.execute(
     "demo.send_ton",
     async (ctx) =>
@@ -135,12 +141,25 @@ app.post("/api/run/idempotent", async (_req, res) => {
     }
   );
 
-  res.json({ first, second });
+  res.json({ key, first, second });
 });
 
 app.post("/api/resume", async (_req, res) => {
   const summary = await runtime.resumePending();
   res.json(summary);
+});
+
+app.post("/api/reset", async (_req, res) => {
+  try {
+    await fs.rm(demoStatePath, { force: true });
+  } catch {
+    // ignore
+  }
+
+  res.json({
+    ok: true,
+    message: "Demo state file removed. Restart the demo server to fully reset in-memory state."
+  });
 });
 
 const port = Number(process.env.PORT ?? 4000);
