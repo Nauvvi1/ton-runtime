@@ -1,8 +1,10 @@
+import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { FileStorage, MockTonAdapter, TonRuntime } from "../../src/index.js";
+import { FileStorage, MockTonAdapter, TonMcpAdapter, TonRuntime, type TonAdapter } from "../../src/index.js";
+import { interpretPrompt } from "./openai-agent.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,10 +15,34 @@ app.use(express.static(path.resolve(__dirname, "../public")));
 
 const demoStatePath = path.resolve(__dirname, "../../.runtime-data/demo-runtime.json");
 
+function createTonAdapter(): TonAdapter {
+  const mode = (process.env.TON_MODE ?? "").trim().toLowerCase();
+  const baseUrl = process.env.TON_MCP_BASE_URL?.trim();
+
+  if (mode === "mock") {
+    return new MockTonAdapter({ confirmAfterMs: 3000 });
+  }
+
+  if (mode === "real" || baseUrl) {
+    if (!baseUrl) {
+      throw new Error("TON_MCP_BASE_URL is required when TON_MODE=real");
+    }
+
+    return new TonMcpAdapter({
+      baseUrl,
+      apiKey: process.env.TON_MCP_API_KEY,
+      network: process.env.TON_NETWORK ?? "mainnet"
+    });
+  }
+
+  return new MockTonAdapter({ confirmAfterMs: 3000 });
+}
+
 const storage = new FileStorage(demoStatePath);
+const tonAdapter = createTonAdapter();
 const runtime = new TonRuntime({
   storage,
-  tonAdapter: new MockTonAdapter({ confirmAfterMs: 3000 }),
+  tonAdapter,
   retry: {
     maxRetries: 3,
     baseDelayMs: 700,
@@ -58,6 +84,15 @@ async function getState() {
 
   return {
     loadedAt: new Date().toISOString(),
+    adapter: {
+      type: tonAdapter instanceof TonMcpAdapter ? "ton-mcp" : "mock",
+      network: tonAdapter.network,
+      realTonEnabled: tonAdapter instanceof TonMcpAdapter
+    },
+    ai: {
+      openAiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini"
+    },
     actions: withTimeline,
     metrics: runtime.getMetrics()
   };
@@ -74,11 +109,16 @@ app.get("/api/actions", async (_req, res) => {
 app.post("/api/run/success", async (_req, res) => {
   const result = await runtime.execute(
     "demo.send_ton",
-    async (ctx) =>
-      ctx.ton.sendTon({
+    async (ctx) => {
+      const tx = await ctx.ton.sendTon({
         to: "EQDdemoAddress",
         amount: "1.0"
-      }),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      return tx;
+    },
     {
       idempotencyKey: `success-${Date.now()}`,
       confirmStrategy: "confirmed"
@@ -96,10 +136,14 @@ app.post("/api/run/fault", async (_req, res) => {
         throw new Error("Injected demo fault");
       }
 
-      return ctx.ton.sendTon({
+      const tx = await ctx.ton.sendTon({
         to: "EQDdemoAddress",
         amount: "1.0"
       });
+
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      return tx;
     },
     {
       idempotencyKey: `fault-${Date.now()}`,
@@ -111,8 +155,6 @@ app.post("/api/run/fault", async (_req, res) => {
 });
 
 app.post("/api/run/idempotent", async (_req, res) => {
-  // Новый ключ на каждый запуск demo-кнопки,
-  // но одинаковый для first и second внутри одного сценария.
   const key = `same-key-demo-${Date.now()}`;
 
   const first = await runtime.execute(
@@ -144,6 +186,112 @@ app.post("/api/run/idempotent", async (_req, res) => {
   res.json({ key, first, second });
 });
 
+app.post("/api/run/ai", async (req, res) => {
+  const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+
+  if (!prompt) {
+    res.status(400).json({ ok: false, error: "prompt is required" });
+    return;
+  }
+
+  try {
+    const interpretation = await interpretPrompt(prompt, {
+      apiKey: process.env.OPENAI_API_KEY,
+      model: process.env.OPENAI_MODEL,
+      baseUrl: process.env.OPENAI_BASE_URL
+    });
+
+    switch (interpretation.decision.action) {
+      case "send_ton": {
+        const result = await runtime.execute(
+          "ai.send_ton",
+          async (ctx) =>
+            ctx.ton.sendTon({
+              to: interpretation.decision.to,
+              amount: interpretation.decision.amount,
+              ...(interpretation.decision.comment ? { comment: interpretation.decision.comment } : {})
+            }),
+          {
+            idempotencyKey: `ai-send-${Date.now()}`,
+            confirmStrategy: "confirmed",
+            metadata: {
+              source: "ai",
+              prompt,
+              provider: interpretation.provider,
+              model: interpretation.model
+            },
+            tags: ["ai", "send_ton"]
+          }
+        );
+
+        res.json({
+          ok: true,
+          prompt,
+          interpretation,
+          result
+        });
+        return;
+      }
+      case "get_balance": {
+        const isValid = await tonAdapter.validateAddress(interpretation.decision.address);
+        if (!isValid) {
+          res.status(400).json({
+            ok: false,
+            prompt,
+            interpretation,
+            error: `Invalid TON address: ${interpretation.decision.address}`
+          });
+          return;
+        }
+
+        const normalized = await tonAdapter.normalizeAddress(interpretation.decision.address);
+        const balance = await tonAdapter.getBalance(normalized);
+
+        res.json({
+          ok: true,
+          prompt,
+          interpretation,
+          result: {
+            address: normalized,
+            balance,
+            network: tonAdapter.network
+          }
+        });
+        return;
+      }
+      case "resume_pending": {
+        const summary = await runtime.resumePending();
+        res.json({
+          ok: true,
+          prompt,
+          interpretation,
+          result: summary
+        });
+        return;
+      }
+      case "noop": {
+        res.json({
+          ok: true,
+          prompt,
+          interpretation,
+          result: {
+            message: interpretation.decision.reason
+          }
+        });
+        return;
+      }
+      default: {
+        res.status(400).json({ ok: false, error: "Unsupported AI action" });
+      }
+    }
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 app.post("/api/resume", async (_req, res) => {
   const summary = await runtime.resumePending();
   res.json(summary);
@@ -165,4 +313,8 @@ app.post("/api/reset", async (_req, res) => {
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
   console.log(`Demo app running on http://localhost:${port}`);
+  console.log(
+    `TON adapter: ${tonAdapter instanceof TonMcpAdapter ? `TonMcpAdapter (${tonAdapter.network})` : `MockTonAdapter (${tonAdapter.network})`}`
+  );
+  console.log(`OpenAI integration: ${process.env.OPENAI_API_KEY ? "enabled" : "fallback heuristic mode"}`);
 });

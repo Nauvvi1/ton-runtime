@@ -6,10 +6,13 @@
   <style>
     body { font-family: Arial, sans-serif; margin: 24px; background: #111827; color: #f9fafb; }
     button { margin-right: 8px; margin-bottom: 12px; padding: 10px 14px; border-radius: 8px; border: 0; cursor: pointer; }
+    textarea { width: 100%; max-width: 980px; min-height: 88px; padding: 12px; border-radius: 12px; border: 1px solid #374151; background: #0f172a; color: #f9fafb; }
     pre { white-space: pre-wrap; background: #1f2937; padding: 14px; border-radius: 12px; overflow-x: auto; }
     .row { margin-bottom: 12px; }
     .meta { margin: 8px 0 16px; color: #9ca3af; font-size: 14px; }
+    .hint { color: #cbd5e1; font-size: 14px; max-width: 980px; line-height: 1.5; }
     .error { color: #fca5a5; }
+    .pill { display: inline-block; padding: 6px 10px; margin-right: 8px; margin-bottom: 8px; border-radius: 999px; background: #1f2937; color: #cbd5e1; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -22,6 +25,22 @@
     <button onclick="run('/api/resume')">Resume pending</button>
     <button onclick="refreshData()">Refresh state</button>
     <button onclick="resetDemo()">Reset demo state</button>
+  </div>
+
+  <h2>AI intent flow</h2>
+  <div class="hint">
+    This layer maps natural-language instructions into a strict, safe action set for the runtime.
+    Supported actions: <span class="pill">send_ton</span><span class="pill">get_balance</span><span class="pill">resume_pending</span>.
+    Without <code>OPENAI_API_KEY</code>, the demo falls back to a deterministic parser so the flow still works locally.
+  </div>
+  <div class="row">
+    <textarea id="aiPrompt" placeholder="Examples:
+Send 0.1 TON to EQDdemoAddress1234567890 with comment "Hackathon demo"
+Check balance for EQDdemoAddress1234567890
+Resume pending actions">Send 0.1 TON to EQDdemoAddress1234567890 with comment "Hackathon demo"</textarea>
+  </div>
+  <div class="row">
+    <button onclick="runAi()">Run AI flow</button>
   </div>
 
   <div class="meta" id="meta">Loading…</div>
@@ -46,13 +65,38 @@
       }
     }
 
+    async function runAi() {
+      const prompt = document.getElementById("aiPrompt").value.trim();
+      if (!prompt) {
+        document.getElementById("response").textContent = "Prompt is required";
+        return;
+      }
+
+      try {
+        document.getElementById("meta").textContent = "Running AI flow...";
+        const response = await fetch("/api/run/ai", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt })
+        });
+        const data = await response.json();
+        document.getElementById("response").textContent = JSON.stringify(data, null, 2);
+        await refreshData();
+      } catch (error) {
+        document.getElementById("response").textContent = String(error);
+        document.getElementById("meta").innerHTML = `<span class="error">AI request failed</span>`;
+      }
+    }
+
     async function refreshData() {
       try {
         document.getElementById("meta").textContent = "Refreshing state...";
         const response = await fetch("/api/state", { cache: "no-store" });
         const data = await response.json();
         document.getElementById("state").textContent = JSON.stringify(data, null, 2);
-        document.getElementById("meta").textContent = `State loaded at ${data.loadedAt}`;
+        const adapterText = data.adapter ? ` · adapter=${data.adapter.type}/${data.adapter.network}` : "";
+        const aiText = data.ai ? ` · ai=${data.ai.openAiConfigured ? data.ai.model : "heuristic-fallback"}` : "";
+        document.getElementById("meta").textContent = `State loaded at ${data.loadedAt}${adapterText}${aiText}`;
       } catch (error) {
         document.getElementById("meta").innerHTML = `<span class="error">Refresh failed</span>`;
         document.getElementById("state").textContent = String(error);

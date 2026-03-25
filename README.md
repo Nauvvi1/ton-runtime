@@ -1,159 +1,126 @@
-# ton-runtime
+# TON Runtime — Safe Execution Layer for AI Agents
 
-Crash-safe, idempotent execution runtime for AI agents on TON.
+## Overview
 
-`ton-runtime` is a TypeScript npm library for running TON agent actions with:
-- retries and backoff
-- idempotency protection
-- storage-backed execution state
-- crash recovery via `resumePending()`
-- execution timeline and structured logs
-- TON adapter support with a ready `TonMcpAdapter`
-- demo app for hackathon presentation
+TON Runtime is a **crash-safe execution layer for AI agents operating on TON**.
 
-## Why this exists
+Most AI-on-chain projects stop at intent parsing.  
+We focus on the harder part:
 
-TON agents often need more than raw SDK calls. Real-world payment and automation flows need:
-- protection against duplicate execution
-- persistence across restarts
-- transparent observability
-- safe retry behavior
-- confirmation-aware transaction tracking
+> **Reliable, idempotent, and recoverable execution of financial actions on TON**
 
-`ton-runtime` provides an execution layer around those flows.
+---
 
-## Installation
+## Architecture
 
-```bash
-npm install ton-runtime
+AI agents should not directly execute blockchain actions.
+
+Instead:
+
+```
+User → AI (OpenAI)
+      ↓
+Intent (structured JSON)
+      ↓
+TON Runtime (execution layer)
+      ↓
+TON Adapter (MCP / Mock)
+      ↓
+Blockchain
 ```
 
-## Quick start
+---
+
+## Key Features
+
+- ✅ Idempotent execution (no duplicate transactions)
+- 🔁 Automatic retries with backoff
+- ♻️ Crash recovery (`resumePending`)
+- 🔒 Safe execution boundaries
+- 🔌 TON MCP-compatible adapter
+- 🧠 AI intent parsing (OpenAI)
+
+---
+
+## AI Integration
+
+Example:
 
 ```ts
-import {
-  TonRuntime,
-  InMemoryStorage,
-  MockTonAdapter
-} from "ton-runtime";
-
-const runtime = new TonRuntime({
-  storage: new InMemoryStorage(),
-  tonAdapter: new MockTonAdapter(),
-  retry: {
-    maxRetries: 3,
-    baseDelayMs: 500,
-    strategy: "exponential"
-  },
-  safety: {
-    dryRun: false,
-    maxSendTon: "5",
-    validateAddresses: true,
-    requireIdempotencyForTonActions: true
-  }
-});
-
-const result = await runtime.execute(
-  "send_payment",
-  async (ctx) => {
-    return await ctx.ton.sendTon({
-      to: "EQDdemoAddress",
-      amount: "1"
-    });
-  },
-  {
-    idempotencyKey: "order-123",
-    confirmStrategy: "confirmed",
-    metadata: { demo: true }
-  }
-);
-
-console.log(result);
+await runAgent("Send 0.1 TON to EQ123...")
 ```
 
-## Core API
+AI converts natural language into structured actions:
 
-### `new TonRuntime(config)`
+```json
+{
+  "action": "send_ton",
+  "to": "EQ123...",
+  "amount": "0.1"
+}
+```
 
-Creates a runtime instance.
+Runtime executes it safely.
 
-### `execute(actionName, handler, options)`
+---
 
-Runs an action with persistence, retries, timeline logging, and optional TON confirmation handling.
+## TON Integration
 
-### `resumePending()`
+Supports:
 
-Restores and resumes actions left in `pending`, `running`, `retry_scheduled`, or `waiting_confirmation`.
+- Toncoin transfers
+- Transaction confirmation tracking
+- MCP-compatible execution layer
 
-### `on(event, listener)`
+Adapters:
+- `MockTonAdapter` — local demo
+- `TonMcpAdapter` — real TON via MCP
 
-Subscribes to runtime events.
+---
 
-## Storage backends
-
-- `InMemoryStorage` — tests and fast local runs
-- `FileStorage` — local persistence and crash-recovery demo
-- `PostgresStorage` — production-style persistence
-
-## TON adapters
-
-- `MockTonAdapter` — safe demo/testing adapter
-- `TonMcpAdapter` — configurable adapter for a TON MCP-compatible HTTP endpoint
-
-## Demo app
-
-Run the demo app:
+## Quick Start
 
 ```bash
 npm install
+cp .env.example .env
 npm run demo
 ```
 
-Then open:
-- `http://localhost:4000` — static UI
-- `http://localhost:4000/api/actions` — action state
-- `http://localhost:4000/api/run/success`
-- `http://localhost:4000/api/run/fault`
-- `http://localhost:4000/api/run/idempotent`
-- `http://localhost:4000/api/resume`
+---
 
-## Examples
+## Environment Variables
 
-See:
-- `examples/basic`
-- `examples/file-storage`
-- `examples/postgres`
-- `examples/recovery`
+See `.env.example`
 
-## Project structure
+Key options:
 
-```txt
-src/
-  runtime/
-  storage/
-  ton/
-  observability/
-  metrics/
-  errors/
-  validation/
-  types/
-  utils/
-demo/
-examples/
-docs/
-tests/
-```
+- `OPENAI_API_KEY` — enables AI
+- `TON_MODE=mock` — safe demo mode
+- `TON_MODE=real` — real TON execution
+- `TON_MCP_BASE_URL` — MCP endpoint
 
-## Known limitations
+---
 
-- The bundled `TonMcpAdapter` is intentionally generic because MCP transport payloads can vary by deployment.
-- Exactly-once execution cannot be guaranteed across the blockchain itself.
-- Production deployments should use Postgres and external monitoring.
+## Use Cases
 
-## Roadmap
+- AI agents performing payments on TON
+- Telegram bots with financial execution
+- Autonomous agent coordination
+- Safe blockchain execution pipelines
 
-- jetton transfer helpers
-- NFT operations
-- webhook alerts
-- richer metrics exporters
-- plugin system for custom action policies
+---
+
+## Why This Matters
+
+> AI can decide *what to do*  
+> TON Runtime ensures it is done **safely**
+
+---
+
+## Conclusion
+
+This is not just an AI bot.
+
+This is:
+
+> **Infrastructure for reliable AI-driven financial execution on TON**

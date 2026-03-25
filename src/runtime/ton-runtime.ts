@@ -128,29 +128,50 @@ export class TonRuntime {
   public async resumePending(): Promise<ResumeSummary> {
     const pending = await this.config.storage.listPendingActions();
     const resumedIds: string[] = [];
-
+  
     for (const action of pending) {
       const handler = this.registry.get(action.name);
       if (!handler) {
         continue;
       }
-
+  
       resumedIds.push(action.id);
       this.metrics.recordRecovered();
-      await this.appendTimeline(action.id, "action.resumed", "Action resumed after restart", {
-        status: action.status
+  
+      const recoveredAction = { ...action };
+  
+      /**
+       * Recovery rules:
+       * 1. waiting_confirmation + tonOperation:
+       *    continue polling confirmation
+       * 2. running without tonOperation:
+       *    process most likely crashed before handler finished,
+       *    so restart execution from pending state
+       * 3. retry_scheduled / pending:
+       *    let runAction continue normally
+       */
+      if (recoveredAction.status === "running" && !recoveredAction.tonOperation) {
+        recoveredAction.status = "pending";
+      }
+  
+      await this.appendTimeline(recoveredAction.id, "action.resumed", "Action resumed after restart", {
+        status: action.status,
+        resumedAs: recoveredAction.status
       });
-
+  
       const resumeOptions: ExecuteOptions<unknown> = {
-        maxRetries: action.maxRetries,
-        ...(action.idempotencyKey !== undefined ? { idempotencyKey: action.idempotencyKey } : {}),
-        ...(action.input !== undefined ? { input: action.input } : {}),
-        ...(action.confirmStrategy !== undefined ? { confirmStrategy: action.confirmStrategy } : {})
+        maxRetries: recoveredAction.maxRetries,
+        ...(recoveredAction.idempotencyKey !== undefined ? { idempotencyKey: recoveredAction.idempotencyKey } : {}),
+        ...(recoveredAction.input !== undefined ? { input: recoveredAction.input } : {}),
+        ...(recoveredAction.confirmStrategy !== undefined
+          ? { confirmStrategy: recoveredAction.confirmStrategy }
+          : {})
       };
-
-      await this.runAction(action, handler, resumeOptions);
+  
+      await this.config.storage.releaseActionLock(recoveredAction.id);
+      await this.runAction(recoveredAction, handler, resumeOptions);
     }
-
+  
     return {
       resumedCount: resumedIds.length,
       actionIds: resumedIds
@@ -268,10 +289,17 @@ export class TonRuntime {
 
       const startedAt = current.startedAt ?? nowIso();
       current.startedAt = startedAt;
-      current.status =
-        current.status === "waiting_confirmation" && current.tonOperation ? "waiting_confirmation" : "running";
+      
+      if (current.status === "waiting_confirmation" && current.tonOperation) {
+        current.status = "waiting_confirmation";
+      } else {
+        current.status = "running";
+      }
+      
       await this.updateAction(current);
-      await this.appendTimeline(current.id, "action.started", "Action started", { actionName: current.name });
+      await this.appendTimeline(current.id, "action.started", "Action started", {
+        actionName: current.name
+      });
 
       while (true) {
         if (current.status === "waiting_confirmation" && current.tonOperation) {
