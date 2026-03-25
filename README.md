@@ -1,33 +1,61 @@
 # TON Runtime — Safe Execution Layer for AI Agents
 
-## Overview
+## Install
 
-TON Runtime is a **crash-safe execution layer for AI agents operating on TON**.
-
-Most AI-on-chain projects stop at intent parsing.  
-We focus on the harder part:
-
-> **Reliable, idempotent, and recoverable execution of financial actions on TON**
+```bash
+npm install ton-runtime
+```
 
 ---
 
-## Architecture
+## Quick Example
 
-AI agents should not directly execute blockchain actions.
+```ts
+const {
+  TonRuntime,
+  MockTonAdapter,
+  InMemoryStorage
+} = require("ton-runtime");
 
-Instead:
+async function main() {
+  const runtime = new TonRuntime({
+    storage: new InMemoryStorage(),
+    tonAdapter: new MockTonAdapter({ confirmAfterMs: 1000 }),
+    retry: {
+      maxRetries: 4,
+      strategy: "exponential",
+      baseDelayMs: 500
+    },
+    safety: {
+      dryRun: false,
+      maxSendTon: "1"
+    }
+  });
 
+  const result = await runtime.execute(
+    "demo.noop",
+    async () => ({ ok: true }),
+    { idempotencyKey: "example-1" }
+  );
+
+  console.log(result);
+}
+
+main();
 ```
-User → AI (OpenAI)
-      ↓
-Intent (structured JSON)
-      ↓
-TON Runtime (execution layer)
-      ↓
-TON Adapter (MCP / Mock)
-      ↓
-Blockchain
-```
+
+---
+
+## What it does
+
+TON Runtime is a **crash-safe execution layer for AI agents operating on TON**.
+
+It takes structured actions (from AI or any system) and executes them safely with:
+
+- retries
+- idempotency
+- confirmation tracking
+- crash recovery
 
 ---
 
@@ -42,15 +70,29 @@ Blockchain
 
 ---
 
-## AI Integration
+## Architecture
 
-Example:
-
-```ts
-await runAgent("Send 0.1 TON to EQ123...")
+```
+User → AI (OpenAI)
+      ↓
+Intent (structured JSON)
+      ↓
+TON Runtime
+      ↓
+TON Adapter (MCP / Mock)
+      ↓
+Blockchain
 ```
 
-AI converts natural language into structured actions:
+---
+
+## AI Integration
+
+```ts
+await runAgent("Send 0.1 TON to EQ123...");
+```
+
+AI converts natural language into:
 
 ```json
 {
@@ -60,67 +102,51 @@ AI converts natural language into structured actions:
 }
 ```
 
-Runtime executes it safely.
-
 ---
 
 ## TON Integration
 
-Supports:
-
-- Toncoin transfers
-- Transaction confirmation tracking
-- MCP-compatible execution layer
-
 Adapters:
-- `MockTonAdapter` — local demo
+
+- `MockTonAdapter` — local testing
 - `TonMcpAdapter` — real TON via MCP
-
----
-
-## Quick Start
-
-```bash
-npm install
-cp .env.example .env
-npm run demo
-```
 
 ---
 
 ## Environment Variables
 
-See `.env.example`
-
-Key options:
-
-- `OPENAI_API_KEY` — enables AI
-- `TON_MODE=mock` — safe demo mode
-- `TON_MODE=real` — real TON execution
-- `TON_MCP_BASE_URL` — MCP endpoint
+- `OPENAI_API_KEY`
+- `TON_MODE=mock | real`
+- `TON_MCP_BASE_URL`
 
 ---
 
 ## Use Cases
 
-- AI agents performing payments on TON
-- Telegram bots with financial execution
-- Autonomous agent coordination
-- Safe blockchain execution pipelines
+- AI payment agents
+- Telegram bots
+- autonomous finance agents
+- safe execution pipelines
 
 ---
 
 ## Why This Matters
 
-> AI can decide *what to do*  
+> AI decides *what to do*  
 > TON Runtime ensures it is done **safely**
 
 ---
 
-## Conclusion
+## Project Vision (Hackathon Context)
 
-This is not just an AI bot.
+Most AI-on-chain projects stop at intent parsing.
 
-This is:
+TON Runtime focuses on the harder problem:
 
-> **Infrastructure for reliable AI-driven financial execution on TON**
+> **Reliable execution of financial actions**
+
+---
+
+## Repository
+
+https://github.com/Nauvvi1/ton-runtime
